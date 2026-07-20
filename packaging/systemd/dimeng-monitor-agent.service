@@ -1,0 +1,22 @@
+[Unit]
+Description=DiMeng Monitor Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dimeng-agent
+Group=dimeng-agent
+EnvironmentFile=/etc/dimeng-monitor-agent/agent.env
+ExecStart=/usr/local/bin/dimeng-monitor-agent --endpoint ${DIMENG_ENDPOINT} --claim-token ${DIMENG_CLAIM_TOKEN}
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/dimeng-monitor-agent
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
