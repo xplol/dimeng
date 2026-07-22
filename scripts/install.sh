@@ -193,7 +193,7 @@ obtain_binary() {
 
   asset="dimeng-monitor-agent-linux-${arch}"
   checksum_file="${TEMP_ROOT}/${asset}.sha256"
-  bases="${DOWNLOAD_BASE:-} ${GITHUB_RELEASE_BASE} ${GITHUB_RAW_BASE} ${GITEE_RAW_BASE}"
+  bases="${DOWNLOAD_BASE:-} ${GITEE_RAW_BASE} ${GITHUB_RELEASE_BASE} ${GITHUB_RAW_BASE}"
   for base in $bases; do
     [ -n "$base" ] || continue
     info "尝试从 ${base} 下载 ${asset}。"
