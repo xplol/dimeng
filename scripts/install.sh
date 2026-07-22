@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-AGENT_VERSION="${DIMENG_VERSION:-v0.1.0}"
+AGENT_VERSION="${DIMENG_VERSION:-v0.1.1}"
 AGREEMENT_VERSION="2026-07-22-v1"
 SERVICE_NAME="dimeng-monitor-agent"
 AGENT_USER="dimeng-agent"
@@ -123,12 +123,12 @@ EOF
 }
 
 download_file() {
-  url="$1"
-  destination="$2"
+  download_url="$1"
+  download_destination="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl -fL --connect-timeout 15 --max-time 180 --retry 2 --retry-delay 2 -o "$destination" "$url"
+    curl -fL --connect-timeout 15 --max-time 180 --retry 2 --retry-delay 2 -o "$download_destination" "$download_url"
   elif command -v wget >/dev/null 2>&1; then
-    wget -T 30 -t 3 -O "$destination" "$url"
+    wget -T 30 -t 3 -O "$download_destination" "$download_url"
   else
     return 127
   fi

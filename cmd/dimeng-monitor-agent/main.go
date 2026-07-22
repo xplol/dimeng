@@ -49,7 +49,7 @@ type enrollment struct {
 	BindingExpiresAt string `json:"binding_expires_at"`
 }
 
-const agentVersion = "v0.1.0"
+const agentVersion = "v0.1.1"
 
 func main() {
 	cfg := config{}
