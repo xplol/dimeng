@@ -20,13 +20,17 @@ import (
 )
 
 type config struct {
-	Endpoint, ClaimToken, StateDir string
-	Once                           bool
+	Endpoint, ClaimToken, ClaimTokenFile, StateDir string
+	Once, ShowEnrollment                           bool
 }
 type metrics struct {
 	ObservedAt    time.Time `json:"observed_at"`
 	OS            string    `json:"os"`
+	OSName        string    `json:"os_name"`
+	Hostname      string    `json:"hostname"`
 	Arch          string    `json:"arch"`
+	AgentVersion  string    `json:"agent_version"`
+	CPUCores      int       `json:"cpu_cores"`
 	CPUPercent    float64   `json:"cpu_percent"`
 	MemoryTotal   uint64    `json:"memory_total_bytes"`
 	MemoryUsed    uint64    `json:"memory_used_bytes"`
@@ -37,17 +41,31 @@ type metrics struct {
 	UptimeSeconds uint64    `json:"uptime_seconds"`
 }
 type enrollment struct {
-	AgentID     string `json:"agent_id"`
-	AccessToken string `json:"access_token"`
+	AgentID          string `json:"agent_id"`
+	AccessToken      string `json:"access_token,omitempty"`
+	BindingCode      string `json:"binding_code"`
+	ObservedIP       string `json:"observed_ip"`
+	Fingerprint      string `json:"fingerprint"`
+	BindingExpiresAt string `json:"binding_expires_at"`
 }
+
+const agentVersion = "v0.1.0"
 
 func main() {
 	cfg := config{}
 	flag.StringVar(&cfg.Endpoint, "endpoint", os.Getenv("DIMENG_ENDPOINT"), "DiMeng API endpoint")
 	flag.StringVar(&cfg.ClaimToken, "claim-token", os.Getenv("DIMENG_CLAIM_TOKEN"), "single-use enrollment token")
+	flag.StringVar(&cfg.ClaimTokenFile, "claim-token-file", os.Getenv("DIMENG_CLAIM_TOKEN_FILE"), "file containing the single-use enrollment token")
 	flag.StringVar(&cfg.StateDir, "state-dir", "/var/lib/dimeng-monitor-agent", "local state directory")
 	flag.BoolVar(&cfg.Once, "once", false, "collect once and print JSON")
+	flag.BoolVar(&cfg.ShowEnrollment, "show-enrollment", false, "show the latest binding receipt")
 	flag.Parse()
+	if cfg.ShowEnrollment {
+		if err := showEnrollmentReceipt(cfg.StateDir, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	sample, err := collect()
 	if err != nil {
 		log.Fatal(err)
@@ -56,10 +74,24 @@ func main() {
 		_ = json.NewEncoder(os.Stdout).Encode(sample)
 		return
 	}
-	if cfg.Endpoint == "" || cfg.ClaimToken == "" {
-		log.Fatal("endpoint and claim-token are required")
+	if cfg.Endpoint == "" {
+		log.Fatal("endpoint is required")
 	}
-	token, err := enroll(cfg, sample)
+	token, err := loadSessionToken(cfg.StateDir)
+	if os.IsNotExist(err) {
+		cfg.ClaimToken, err = resolveClaimToken(cfg.ClaimToken, cfg.ClaimTokenFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		var result enrollment
+		result, err = enroll(cfg, sample)
+		token = result.AccessToken
+		if err == nil && cfg.ClaimTokenFile != "" {
+			if removeErr := os.Remove(cfg.ClaimTokenFile); removeErr != nil && !os.IsNotExist(removeErr) {
+				log.Printf("warning: failed to remove used claim token: %v", removeErr)
+			}
+		}
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -73,39 +105,77 @@ func main() {
 	}
 }
 
-func enroll(cfg config, sample metrics) (string, error) {
-	if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
+func loadSessionToken(stateDir string) (string, error) {
+	value, err := os.ReadFile(filepath.Join(stateDir, "session.token"))
+	if err != nil {
 		return "", err
+	}
+	token := strings.TrimSpace(string(value))
+	if token == "" {
+		return "", fmt.Errorf("local session token is empty")
+	}
+	return token, nil
+}
+
+func resolveClaimToken(inline, filePath string) (string, error) {
+	if token := strings.TrimSpace(inline); token != "" {
+		return token, nil
+	}
+	if filePath == "" {
+		return "", nil
+	}
+	value, err := os.ReadFile(filePath)
+	if os.IsNotExist(err) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("read claim token: %w", err)
+	}
+	token := strings.TrimSpace(string(value))
+	if token == "" {
+		return "", fmt.Errorf("claim token file is empty")
+	}
+	return token, nil
+}
+
+func enroll(cfg config, sample metrics) (enrollment, error) {
+	if err := os.MkdirAll(cfg.StateDir, 0700); err != nil {
+		return enrollment{}, err
 	}
 	keyPath := filepath.Join(cfg.StateDir, "agent.key")
 	private, err := os.ReadFile(keyPath)
 	if os.IsNotExist(err) {
 		_, generated, e := ed25519.GenerateKey(rand.Reader)
 		if e != nil {
-			return "", e
+			return enrollment{}, e
 		}
 		private = generated
 		if e = os.WriteFile(keyPath, private, 0600); e != nil {
-			return "", e
+			return enrollment{}, e
 		}
 	} else if err != nil {
-		return "", err
+		return enrollment{}, err
 	}
 	if len(private) != ed25519.PrivateKeySize {
-		return "", fmt.Errorf("invalid local agent key")
+		return enrollment{}, fmt.Errorf("invalid local agent key")
 	}
 	payload := map[string]any{"claim_token": cfg.ClaimToken, "public_key": base64.StdEncoding.EncodeToString(ed25519.PrivateKey(private).Public().(ed25519.PublicKey)), "metrics": sample}
 	var response enrollment
 	if err := postJSON(cfg.Endpoint+"/api/v1/monitor/agents/enroll", "", payload, &response); err != nil {
-		return "", err
+		return enrollment{}, err
 	}
 	if response.AgentID == "" || response.AccessToken == "" {
-		return "", fmt.Errorf("enrollment response missing credentials")
+		return enrollment{}, fmt.Errorf("enrollment response missing credentials")
 	}
 	if err := os.WriteFile(filepath.Join(cfg.StateDir, "session.token"), []byte(response.AccessToken), 0600); err != nil {
-		return "", err
+		return enrollment{}, err
 	}
-	return response.AccessToken, nil
+	if response.BindingCode != "" {
+		if err := saveEnrollmentReceipt(cfg.StateDir, response); err != nil {
+			return enrollment{}, err
+		}
+	}
+	return response, nil
 }
 
 func post(url, token string, value any) error { return postJSON(url, token, value, nil) }
@@ -138,7 +208,13 @@ func postJSON(url, token string, value, output any) error {
 }
 
 func collect() (metrics, error) {
-	m := metrics{ObservedAt: time.Now().UTC(), OS: runtime.GOOS, Arch: runtime.GOARCH}
+	hostname, _ := os.Hostname()
+	m := metrics{ObservedAt: time.Now().UTC(), OS: runtime.GOOS, OSName: readOSName(), Hostname: hostname, Arch: runtime.GOARCH, AgentVersion: agentVersion, CPUCores: runtime.NumCPU()}
+	cpu, err := sampleCPUPercent(200 * time.Millisecond)
+	if err != nil {
+		return m, err
+	}
+	m.CPUPercent = cpu
 	mem, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
 		return m, err
@@ -181,4 +257,93 @@ func collect() (metrics, error) {
 		}
 	}
 	return m, nil
+}
+
+func readOSName() string {
+	value, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return runtime.GOOS
+	}
+	for _, line := range strings.Split(string(value), "\n") {
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			return strings.Trim(strings.TrimPrefix(line, "PRETTY_NAME="), "\"")
+		}
+	}
+	return runtime.GOOS
+}
+
+func saveEnrollmentReceipt(stateDir string, result enrollment) error {
+	receipt := enrollment{
+		AgentID: result.AgentID, BindingCode: result.BindingCode, ObservedIP: result.ObservedIP,
+		Fingerprint: result.Fingerprint, BindingExpiresAt: result.BindingExpiresAt,
+	}
+	value, err := json.Marshal(receipt)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(stateDir, "enrollment.json"), value, 0600)
+}
+
+func showEnrollmentReceipt(stateDir string, output *os.File) error {
+	value, err := os.ReadFile(filepath.Join(stateDir, "enrollment.json"))
+	if err != nil {
+		return fmt.Errorf("read enrollment receipt: %w", err)
+	}
+	var receipt enrollment
+	if err := json.Unmarshal(value, &receipt); err != nil {
+		return fmt.Errorf("decode enrollment receipt: %w", err)
+	}
+	_, err = fmt.Fprintf(output, "滴萌探针等待绑定\n公网 IP：%s\n绑定码：%s\n主机指纹：%s\n有效期至：%s\nAgent ID：%s\n", receipt.ObservedIP, receipt.BindingCode, receipt.Fingerprint, receipt.BindingExpiresAt, receipt.AgentID)
+	return err
+}
+
+type cpuTimes struct {
+	total uint64
+	idle  uint64
+}
+
+func sampleCPUPercent(interval time.Duration) (float64, error) {
+	first, err := readCPUTimes()
+	if err != nil {
+		return 0, err
+	}
+	time.Sleep(interval)
+	second, err := readCPUTimes()
+	if err != nil {
+		return 0, err
+	}
+	totalDelta := second.total - first.total
+	if totalDelta == 0 {
+		return 0, nil
+	}
+	idleDelta := second.idle - first.idle
+	return float64(totalDelta-idleDelta) * 100 / float64(totalDelta), nil
+}
+
+func readCPUTimes() (cpuTimes, error) {
+	value, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return cpuTimes{}, err
+	}
+	return parseCPUTimes(string(value))
+}
+
+func parseCPUTimes(value string) (cpuTimes, error) {
+	line := strings.SplitN(value, "\n", 2)[0]
+	fields := strings.Fields(line)
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return cpuTimes{}, fmt.Errorf("invalid /proc/stat cpu line")
+	}
+	var times cpuTimes
+	for index, field := range fields[1:] {
+		part, err := strconv.ParseUint(field, 10, 64)
+		if err != nil {
+			return cpuTimes{}, fmt.Errorf("invalid /proc/stat value: %w", err)
+		}
+		times.total += part
+		if index == 3 || index == 4 {
+			times.idle += part
+		}
+	}
+	return times, nil
 }

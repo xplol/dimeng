@@ -1,39 +1,87 @@
-# DiMeng Monitor Agent
+# 滴萌服务器探针 / DiMeng Monitor Agent
 
-DiMeng Monitor Agent is an open-source Linux server monitor. It only makes outbound HTTPS requests to the DiMeng API. It opens no listening port and has no remote shell, terminal, file manager, port forwarding, or arbitrary command execution.
+滴萌服务器探针是开源的 Linux 服务器状态采集器。它只主动向滴萌 API 发起 HTTPS 请求，不新增监听端口，也不包含远程 Shell、终端、文件管理、端口转发或任意命令执行能力。
 
-## Repositories
+## 公开仓库与联系
 
-- Primary source: https://github.com/xplol/dimeng
-- China mirror: https://gitee.com/xiang_peng/dimeng
+- GitHub 主仓库：https://github.com/xplol/dimeng
+- Gitee 国内镜像：https://gitee.com/xiang_peng/dimeng
+- 博主 QQ：5759323
+- 微信 / 电话：18981837812
 
-GitHub is the primary source of releases and issues. Gitee mirrors the same `main` branch for domestic access.
+GitHub 是主发布源，Gitee 镜像相同的稳定版本，方便中国大陆服务器下载。
 
-## Status
+## 当前状态
 
-This is the initial public implementation. It collects Linux memory, root filesystem, network byte totals, uptime, OS and architecture, and enrolls with a one-time claim token. CPU sampling and API history aggregation are being completed alongside the DiMeng API.
+当前仓库包含 Agent、安装脚本、`fwq` 管理命令和 Linux `amd64/arm64` 构建产物。Agent 的首次注册、会话凭据复用、心跳、安装、重启和卸载流程已在 Ubuntu 26.04 测试机完成验证。
 
-## Local verification
+滴萌监控注册与心跳 API 已通过 `https://xlx.wipecell.top` 接通。真实测试已验证：安装后显示出口 IP、一次性绑定码和主机指纹；登录用户可以认领服务器；其他用户不能读取该服务器、详情或指标。
 
-```bash
+## 支持范围
+
+- Linux `amd64`、`arm64`
+- 使用 systemd 的 Ubuntu、Debian、CentOS/RHEL、Rocky/Alma、Alibaba Cloud Linux
+- 自动补齐 `ca-certificates`、`curl`、`coreutils`、`passwd/shadow-utils` 等缺失依赖
+- 暂不支持 Windows、macOS、Alpine/OpenRC、容器内安装和非 systemd 系统
+
+## 安装前授权
+
+安装脚本会先显示公开仓库、联系方式和安装与数据授权协议。只有输入 `同意` 后才会继续。自动化部署可在已经阅读协议后显式加入 `--accept-agreement`。
+
+首次注册成功后，安装器会显示服务器出口 IP、一次性绑定码、主机指纹和过期时间。用户登录滴萌客户端后输入 IP 与绑定码完成认领。绑定码 15 分钟失效且只能使用一次，不要把它写进 Git、聊天记录、URL 或工单截图。
+
+正式发布后，推荐先下载脚本再运行：
+
+```sh
+curl -fL https://raw.githubusercontent.com/xplol/dimeng/main/scripts/install.sh -o dimeng-install.sh
+sudo sh dimeng-install.sh \
+  --endpoint 'https://xlx.wipecell.top'
+```
+
+安装器会识别架构、下载对应二进制和 `.sha256`、完成校验、自检后再安装。
+
+## fwq 管理命令
+
+安装完成后直接输入：
+
+```sh
+fwq                 # 打开交互菜单
+fwq status          # 查看状态
+fwq logs            # 查看最近日志
+sudo fwq restart    # 重启
+sudo fwq uninstall  # 卸载 Agent 和本地身份，保留 fwq 便于重装
+sudo fwq purge      # 完整清除 Agent、身份、fwq 和专用系统用户
+```
+
+`fwq uninstall` 和 `fwq purge` 都不会删除系统依赖，防止影响服务器上其他软件。
+
+## 数据与安全边界
+
+- 采集：CPU、内存、根文件系统磁盘、网卡累计收发量、运行时长、操作系统和架构。
+- 不采集：站点文件内容、数据库内容、SSH 密钥、环境变量、进程参数、网络数据包内容。
+- 只出站 HTTPS，通常使用 TCP 443；不要求新增入站防火墙规则。
+- 以无登录权限的 `dimeng-agent` 专用用户运行。
+- systemd 默认限制 `MemoryMax=64M`、`CPUQuota=20%`，并启用文件系统、设备、内核和权限沙箱。
+- Agent 会话凭据权限为 `0600`；绑定码只保存在本地绑定回执和服务端哈希中，后续心跳使用本地会话凭据。
+- `fwq uninstall` 会删除本地身份，重新安装时必须生成新的绑定码。
+- 当前版本默认不自动更新。升级必须由服务器管理员主动运行 `fwq install`，避免后台静默替换服务器程序。
+- 公开监控 Agent 与滴萌平台私有测速 Agent 完全分离。
+
+## 后续上线工作
+
+- 建立正式数据库迁移流程，替代当前应用启动时的幂等建表。
+- 在隐私政策中明确指标保存期限、用途、导出方式和用户删除流程。
+- 为发布清单增加独立数字签名；SHA-256 能发现下载损坏，但不能防止二进制和校验文件同时被替换。
+- 建立版本升级、回滚和安全漏洞通知机制，并在真实 `amd64/arm64` 服务器上完成发布验收。
+
+## 本地开发验证
+
+```sh
+go test ./...
+go vet ./...
 go build ./cmd/dimeng-monitor-agent
 ./dimeng-monitor-agent --once
+sh -n scripts/install.sh
 ```
 
-## Enrollment
-
-The client creates a single-use claim token. Do not place the token in a URL, chat log, or Git repository.
-
-```bash
-sudo ./dimeng-monitor-agent \
-  --endpoint https://api.ping1.me \
-  --claim-token '<single-use-token>'
-```
-
-## Security boundary
-
-- Outbound HTTPS only, normally TCP 443.
-- No listener and no inbound firewall rule required.
-- No collection of file contents, process arguments, environment variables, SSH keys, databases, or packet payloads.
-- Enrollment token is single-use; the agent generates an Ed25519 key under its state directory.
-- The public monitor Agent is separate from DiMeng's private platform probe Agent.
+安装器和 systemd 变更必须在隔离 Linux 测试机验证安装、首次注册、重启、无监听端口、卸载与原有业务不受影响，不能只根据 macOS 编译结果发布。
