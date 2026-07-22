@@ -1,8 +1,8 @@
 #!/usr/bin/env sh
 set -eu
 
-AGENT_VERSION="${DIMENG_VERSION:-v0.1.1}"
-AGREEMENT_VERSION="2026-07-22-v1"
+AGENT_VERSION="${DIMENG_VERSION:-v0.2.0}"
+AGREEMENT_VERSION="2026-07-22-v2"
 SERVICE_NAME="dimeng-monitor-agent"
 AGENT_USER="dimeng-agent"
 BIN_PATH="/usr/local/bin/dimeng-monitor-agent"
@@ -66,7 +66,7 @@ print_agreement() {
 3. 探针不读取站点文件内容、数据库内容、SSH 密钥、环境变量、进程参数或网络数据包内容。
 4. 探针只主动发起 HTTPS 出站连接，不新增公网监听端口，不提供远程 Shell、文件管理或任意命令执行能力。
 5. 我理解安装和运行仍会占用少量 CPU、内存、磁盘和网络资源，并同意自行确认服务器业务兼容性。
-6. 首次注册后，终端会显示 15 分钟有效的一次性绑定码；用户需在滴萌客户端登录后完成绑定。
+6. 首次注册后，终端会显示 15 分钟有效的绑定二维码和一次性绑定码；用户需在滴萌客户端登录后完成绑定。
 7. 我可以随时运行 fwq uninstall 卸载探针；系统依赖不会自动删除，以免影响其他软件。
 8. 项目源码按仓库中的开源许可证公开；本协议只用于服务器安装授权和指标数据处理告知。
 
@@ -81,10 +81,14 @@ accept_agreement() {
     return
   fi
   has_tty || die "当前环境无法交互确认，请阅读协议后添加 --accept-agreement。"
-  printf '\n请输入“同意”继续安装，其他输入将退出：' >/dev/tty
+  printf '\n请输入选择：\n  1. 同意并继续\n  2. 不同意并退出\n请选择 [1/2]：' >/dev/tty
   answer=""
   IFS= read -r answer </dev/tty || true
-  [ "$answer" = "同意" ] || die "你没有同意授权协议，安装已取消。"
+  case "$answer" in
+    1) info "你已同意授权协议，继续安装。" ;;
+    2) die "你不同意授权协议，安装已取消。" ;;
+    *) die "无效选择，安装已取消。请重新运行并输入 1 或 2。" ;;
+  esac
 }
 
 install_usage() {
@@ -438,7 +442,7 @@ wait_for_enrollment() {
       info "首次注册成功。"
       printf '\n'
       "$BIN_PATH" --state-dir "$STATE_DIR" --show-enrollment || true
-      printf '\n请在滴萌客户端的“添加服务器”页面输入上面的公网 IP 和绑定码。\n'
+      printf '\n请在滴萌客户端的“添加服务器”页面扫描上面的二维码；无法扫码时可手工输入公网 IP 和绑定码。\n'
       return 0
     fi
     if ! systemctl is-active --quiet "$SERVICE_NAME" && [ "$attempts" -ge 2 ]; then

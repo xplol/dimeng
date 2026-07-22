@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -17,6 +19,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 type config struct {
@@ -49,7 +53,7 @@ type enrollment struct {
 	BindingExpiresAt string `json:"binding_expires_at"`
 }
 
-const agentVersion = "v0.1.1"
+const agentVersion = "v0.2.0"
 
 func main() {
 	cfg := config{}
@@ -284,7 +288,7 @@ func saveEnrollmentReceipt(stateDir string, result enrollment) error {
 	return os.WriteFile(filepath.Join(stateDir, "enrollment.json"), value, 0600)
 }
 
-func showEnrollmentReceipt(stateDir string, output *os.File) error {
+func showEnrollmentReceipt(stateDir string, output io.Writer) error {
 	value, err := os.ReadFile(filepath.Join(stateDir, "enrollment.json"))
 	if err != nil {
 		return fmt.Errorf("read enrollment receipt: %w", err)
@@ -293,8 +297,27 @@ func showEnrollmentReceipt(stateDir string, output *os.File) error {
 	if err := json.Unmarshal(value, &receipt); err != nil {
 		return fmt.Errorf("decode enrollment receipt: %w", err)
 	}
-	_, err = fmt.Fprintf(output, "滴萌探针等待绑定\n公网 IP：%s\n绑定码：%s\n主机指纹：%s\n有效期至：%s\nAgent ID：%s\n", receipt.ObservedIP, receipt.BindingCode, receipt.Fingerprint, receipt.BindingExpiresAt, receipt.AgentID)
+	bindingURI, err := buildBindingURI(receipt)
+	if err != nil {
+		return err
+	}
+	code, err := qrcode.New(bindingURI, qrcode.Medium)
+	if err != nil {
+		return fmt.Errorf("create binding QR code: %w", err)
+	}
+	_, err = fmt.Fprintf(output, "滴萌探针等待绑定\n\n请打开滴萌小程序，进入添加服务器页扫描二维码：\n%s\n公网 IP：%s\n绑定码：%s\n主机指纹：%s\n有效期至：%s\nAgent ID：%s\n\n二维码无法扫描时，可手工输入公网 IP 与绑定码。\n", code.ToSmallString(false), receipt.ObservedIP, receipt.BindingCode, receipt.Fingerprint, receipt.BindingExpiresAt, receipt.AgentID)
 	return err
+}
+
+func buildBindingURI(receipt enrollment) (string, error) {
+	if strings.TrimSpace(receipt.ObservedIP) == "" || strings.TrimSpace(receipt.BindingCode) == "" || strings.TrimSpace(receipt.Fingerprint) == "" {
+		return "", fmt.Errorf("enrollment receipt missing binding QR fields")
+	}
+	query := url.Values{}
+	query.Set("ip", receipt.ObservedIP)
+	query.Set("code", receipt.BindingCode)
+	query.Set("fingerprint", receipt.Fingerprint)
+	return "dimeng://bind?" + query.Encode(), nil
 }
 
 type cpuTimes struct {
