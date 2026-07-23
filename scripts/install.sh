@@ -429,6 +429,7 @@ install_agent() {
   fi
   printf 'DIMENG_ENDPOINT=%s\n' "$ENDPOINT" >"$ENV_PATH"
   printf 'DIMENG_AUTO_UPGRADE=%s\n' "$([ "$SIGNED_UPGRADE" = "1" ] && printf true || printf false)" >>"$ENV_PATH"
+  printf 'DIMENG_HEARTBEAT_INTERVAL_SECONDS=3\n' >>"$ENV_PATH"
   chmod 0600 "$ENV_PATH"
   if [ ! -s "$SESSION_TOKEN_PATH" ] && [ -n "$CLAIM_TOKEN" ]; then
     printf '%s\n' "$CLAIM_TOKEN" >"$CLAIM_TOKEN_PATH"
@@ -492,10 +493,14 @@ confirm_removal() {
   force="$2"
   [ "$force" = "1" ] && return
   has_tty || die "非交互卸载请添加 --yes。"
-  printf '%s 输入“确认”继续：' "$prompt" >/dev/tty
+  printf '%s\n  1. 确定\n  2. 取消\n请选择 [1/2]：' "$prompt" >/dev/tty
   answer=""
   IFS= read -r answer </dev/tty || true
-  [ "$answer" = "确认" ] || die "操作已取消。"
+  case "$answer" in
+    1) info "已确定，继续执行。" ;;
+    2) die "操作已取消。" ;;
+    *) die "无效选择，操作已取消。请重新运行并输入 1 或 2。" ;;
+  esac
 }
 
 uninstall_agent() {
@@ -630,7 +635,7 @@ manager_main() {
       ;;
     upgrade)
       require_root
-      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.4 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
+      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.5 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
       [ "$#" -eq 3 ] || die "用法：fwq upgrade <版本> <manifest_url> <signature_url>"
       install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
       printf '{"version":"%s","manifest_url":"%s","signature_url":"%s"}\n' "$1" "$2" "$3" >"${UPGRADE_DIR}/request.json"

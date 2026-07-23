@@ -66,7 +66,7 @@ type heartbeatResponse struct {
 	Upgrade *upgradeInstruction `json:"upgrade,omitempty"`
 }
 
-const agentVersion = "v0.3.4"
+const agentVersion = "v0.3.5"
 
 var agentCapabilities = []string{
 	"system_metrics",
@@ -134,7 +134,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(parseHeartbeatInterval(os.Getenv("DIMENG_HEARTBEAT_INTERVAL_SECONDS")))
 	defer ticker.Stop()
 	for {
 		if sample, err = collect(); err == nil {
@@ -149,6 +149,14 @@ func main() {
 		}
 		<-ticker.C
 	}
+}
+
+func parseHeartbeatInterval(value string) time.Duration {
+	seconds, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || seconds < 1 || seconds > 300 {
+		seconds = 3
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func queueUpgrade(path string, instruction upgradeInstruction) error {

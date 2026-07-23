@@ -5,7 +5,23 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestParseHeartbeatInterval(t *testing.T) {
+	for input, expected := range map[string]time.Duration{
+		"":        3 * time.Second,
+		"3":       3 * time.Second,
+		"1":       time.Second,
+		"300":     300 * time.Second,
+		"0":       3 * time.Second,
+		"invalid": 3 * time.Second,
+	} {
+		if actual := parseHeartbeatInterval(input); actual != expected {
+			t.Fatalf("parseHeartbeatInterval(%q) = %s, want %s", input, actual, expected)
+		}
+	}
+}
 
 func TestLoadSessionToken(t *testing.T) {
 	dir := t.TempDir()
