@@ -444,7 +444,7 @@ install_agent() {
   if [ "$SIGNED_UPGRADE" = "1" ]; then write_updater_units; fi
   prepare_manager_script
   systemctl daemon-reload
-  if [ "$SIGNED_UPGRADE" = "1" ]; then systemctl enable "$UPDATER_PATH_UNIT"; fi
+  if [ "$SIGNED_UPGRADE" = "1" ]; then systemctl enable --now "$UPDATER_PATH_UNIT"; fi
   if [ "$NO_START" = "1" ]; then
     systemctl enable "$SERVICE_NAME"
     info "探针已安装并设为开机启动，本次按参数要求未启动。"
@@ -630,7 +630,7 @@ manager_main() {
       ;;
     upgrade)
       require_root
-      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.1 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
+      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.2 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
       [ "$#" -eq 3 ] || die "用法：fwq upgrade <版本> <manifest_url> <signature_url>"
       install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
       printf '{"version":"%s","manifest_url":"%s","signature_url":"%s"}\n' "$1" "$2" "$3" >"${UPGRADE_DIR}/request.json"
