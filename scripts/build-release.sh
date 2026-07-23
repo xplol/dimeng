@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-VERSION="${DIMENG_VERSION:-v0.3.0}"
+VERSION="${DIMENG_VERSION:-v0.3.1}"
 RELEASE_BASE_URL="${DIMENG_RELEASE_BASE_URL:-}"
 SIGNING_KEY="${DIMENG_RELEASE_SIGNING_KEY:-}"
 ROOT_DIR="$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)"

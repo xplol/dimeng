@@ -29,12 +29,24 @@ GITEE_RAW_BASE="https://gitee.com/xiang_peng/dimeng/raw/${AGENT_VERSION}/dist"
 
 TEMP_ROOT=""
 SIGNED_UPGRADE="${DIMENG_ENABLE_SIGNED_UPGRADE:-0}"
+INSTALL_IN_PROGRESS=0
+FRESH_INSTALL=0
 
 info() { printf '[滴萌] %s\n' "$*"; }
 warn() { printf '[滴萌] 警告：%s\n' "$*" >&2; }
 die() { printf '[滴萌] 错误：%s\n' "$*" >&2; exit 1; }
 
 cleanup() {
+  if [ "$INSTALL_IN_PROGRESS" = "1" ] && [ "$FRESH_INSTALL" = "1" ]; then
+    # Do not leave a fresh installation half-installed if a later filesystem or systemd step fails.
+    systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    rm -f "$UNIT_PATH" "$UPDATER_UNIT_PATH" "$UPDATER_PATH_UNIT_PATH" "$BIN_PATH" "$MANAGER_PATH"
+    rm -rf "$CONFIG_DIR" "$STATE_DIR" "$MANAGER_DIR"
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    if id -u "$AGENT_USER" >/dev/null 2>&1; then
+      userdel "$AGENT_USER" >/dev/null 2>&1 || true
+    fi
+  fi
   if [ -n "$TEMP_ROOT" ] && [ -d "$TEMP_ROOT" ]; then
     rm -rf "$TEMP_ROOT"
   fi
@@ -374,6 +386,11 @@ install_agent() {
   [ "$(uname -s)" = "Linux" ] || die "当前安装器只支持 Linux。"
   [ -d /run/systemd/system ] || die "当前系统未使用 systemd，暂不支持自动安装。"
 
+  if [ ! -e "$BIN_PATH" ] && [ ! -e "$ENV_PATH" ] && [ ! -e "$UNIT_PATH" ] && [ ! -e "$STATE_DIR" ]; then
+    FRESH_INSTALL=1
+  fi
+  INSTALL_IN_PROGRESS=1
+
   accept_agreement
   install_dependencies
 
@@ -399,6 +416,7 @@ install_agent() {
   fi
 
   install -d -m 0750 "$CONFIG_DIR"
+  install -d -m 0755 "$MANAGER_DIR"
   install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$STATE_DIR"
   install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
   install -m 0755 "$staged_binary" "$BIN_PATH"
@@ -435,6 +453,7 @@ install_agent() {
     wait_for_enrollment
     info "探针已安装并启动。"
   fi
+  INSTALL_IN_PROGRESS=0
   info "管理命令：fwq"
   info "状态检查：fwq status"
   info "卸载命令：fwq uninstall"
@@ -611,7 +630,7 @@ manager_main() {
       ;;
     upgrade)
       require_root
-      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.0 发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
+      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.1 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
       [ "$#" -eq 3 ] || die "用法：fwq upgrade <版本> <manifest_url> <signature_url>"
       install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
       printf '{"version":"%s","manifest_url":"%s","signature_url":"%s"}\n' "$1" "$2" "$3" >"${UPGRADE_DIR}/request.json"
