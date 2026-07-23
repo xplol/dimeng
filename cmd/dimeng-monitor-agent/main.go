@@ -24,8 +24,10 @@ import (
 )
 
 type config struct {
-	Endpoint, ClaimToken, ClaimTokenFile, StateDir string
-	Once, ShowEnrollment                           bool
+	Endpoint, ClaimToken, ClaimTokenFile, StateDir, UpgradeRequestFile string
+	Once, ShowEnrollment, Doctor, DoctorJSON                           bool
+	ShowVersion                                                        bool
+	AutoUpgrade                                                        bool
 }
 type metrics struct {
 	ObservedAt    time.Time `json:"observed_at"`
@@ -34,6 +36,7 @@ type metrics struct {
 	Hostname      string    `json:"hostname"`
 	Arch          string    `json:"arch"`
 	AgentVersion  string    `json:"agent_version"`
+	Capabilities  []string  `json:"capabilities"`
 	CPUCores      int       `json:"cpu_cores"`
 	CPUPercent    float64   `json:"cpu_percent"`
 	MemoryTotal   uint64    `json:"memory_total_bytes"`
@@ -53,7 +56,24 @@ type enrollment struct {
 	BindingExpiresAt string `json:"binding_expires_at"`
 }
 
-const agentVersion = "v0.2.0"
+type upgradeInstruction struct {
+	Version      string `json:"version"`
+	ManifestURL  string `json:"manifest_url"`
+	SignatureURL string `json:"signature_url"`
+}
+
+type heartbeatResponse struct {
+	Upgrade *upgradeInstruction `json:"upgrade,omitempty"`
+}
+
+const agentVersion = "v0.3.0"
+
+var agentCapabilities = []string{
+	"system_metrics",
+	"network_metrics",
+	"enrollment_qr",
+	"doctor_v1",
+}
 
 func main() {
 	cfg := config{}
@@ -61,9 +81,24 @@ func main() {
 	flag.StringVar(&cfg.ClaimToken, "claim-token", os.Getenv("DIMENG_CLAIM_TOKEN"), "single-use enrollment token")
 	flag.StringVar(&cfg.ClaimTokenFile, "claim-token-file", os.Getenv("DIMENG_CLAIM_TOKEN_FILE"), "file containing the single-use enrollment token")
 	flag.StringVar(&cfg.StateDir, "state-dir", "/var/lib/dimeng-monitor-agent", "local state directory")
+	flag.StringVar(&cfg.UpgradeRequestFile, "upgrade-request-file", "/var/lib/dimeng-monitor-agent/upgrade/request.json", "signed updater request file")
+	flag.BoolVar(&cfg.AutoUpgrade, "auto-upgrade", envBool("DIMENG_AUTO_UPGRADE", false), "accept signed upgrade instructions")
 	flag.BoolVar(&cfg.Once, "once", false, "collect once and print JSON")
 	flag.BoolVar(&cfg.ShowEnrollment, "show-enrollment", false, "show the latest binding receipt")
+	flag.BoolVar(&cfg.Doctor, "doctor", false, "run local diagnostics")
+	flag.BoolVar(&cfg.DoctorJSON, "doctor-json", false, "run local diagnostics and print JSON")
+	flag.BoolVar(&cfg.ShowVersion, "version", false, "print agent version")
 	flag.Parse()
+	if cfg.ShowVersion {
+		fmt.Println(agentVersion)
+		return
+	}
+	if cfg.Doctor || cfg.DoctorJSON {
+		if err := runDoctor(cfg, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if cfg.ShowEnrollment {
 		if err := showEnrollmentReceipt(cfg.StateDir, os.Stdout); err != nil {
 			log.Fatal(err)
@@ -103,10 +138,59 @@ func main() {
 	defer ticker.Stop()
 	for {
 		if sample, err = collect(); err == nil {
-			_ = post(cfg.Endpoint+"/api/v1/monitor/agents/heartbeat", token, sample)
+			var response heartbeatResponse
+			if err := postJSON(cfg.Endpoint+"/api/v1/monitor/agents/heartbeat", token, sample, &response); err != nil {
+				log.Printf("heartbeat failed: %v", err)
+			} else if cfg.AutoUpgrade && response.Upgrade != nil {
+				if err := queueUpgrade(cfg.UpgradeRequestFile, *response.Upgrade); err != nil {
+					log.Printf("upgrade request rejected: %v", err)
+				}
+			}
 		}
 		<-ticker.C
 	}
+}
+
+func queueUpgrade(path string, instruction upgradeInstruction) error {
+	if instruction.Version == "" || instruction.Version == agentVersion {
+		return nil
+	}
+	if instruction.ManifestURL == "" || instruction.SignatureURL == "" {
+		return fmt.Errorf("upgrade instruction is incomplete")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	raw, err := json.Marshal(instruction)
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".upgrade-request-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if _, err := temporary.Write(append(raw, '\n')); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(0600); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
+}
+
+func envBool(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }
 
 func loadSessionToken(stateDir string) (string, error) {
@@ -213,7 +297,7 @@ func postJSON(url, token string, value, output any) error {
 
 func collect() (metrics, error) {
 	hostname, _ := os.Hostname()
-	m := metrics{ObservedAt: time.Now().UTC(), OS: runtime.GOOS, OSName: readOSName(), Hostname: hostname, Arch: runtime.GOARCH, AgentVersion: agentVersion, CPUCores: runtime.NumCPU()}
+	m := metrics{ObservedAt: time.Now().UTC(), OS: runtime.GOOS, OSName: readOSName(), Hostname: hostname, Arch: runtime.GOARCH, AgentVersion: agentVersion, Capabilities: append([]string(nil), agentCapabilities...), CPUCores: runtime.NumCPU()}
 	cpu, err := sampleCPUPercent(200 * time.Millisecond)
 	if err != nil {
 		return m, err

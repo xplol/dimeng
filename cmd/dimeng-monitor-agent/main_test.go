@@ -21,6 +21,52 @@ func TestLoadSessionToken(t *testing.T) {
 	}
 }
 
+func TestDoctorReportRequiresHTTPSAndReportsCapabilities(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "agent.key"), []byte("key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "session.token"), []byte("token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	report := buildDoctorReport(config{Endpoint: "http://example.com", StateDir: dir})
+	if report.Status != "fail" {
+		t.Fatalf("doctor status = %q, want fail", report.Status)
+	}
+	if len(report.Capabilities) == 0 || report.Capabilities[0] != "system_metrics" {
+		t.Fatalf("unexpected capabilities: %+v", report.Capabilities)
+	}
+	report = buildDoctorReport(config{Endpoint: "https://xlx.wipecell.top", StateDir: dir})
+	if report.Status != "ok" {
+		t.Fatalf("doctor status = %q, want ok: %+v", report.Status, report.Checks)
+	}
+}
+
+func TestQueueUpgradeIsAtomicAndSkipsCurrentVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "upgrade", "request.json")
+	if err := queueUpgrade(path, upgradeInstruction{Version: agentVersion}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatal("current version must not create an upgrade request")
+	}
+	instruction := upgradeInstruction{Version: "v0.4.0", ManifestURL: "https://example.com/manifest.json", SignatureURL: "https://example.com/manifest.sig"}
+	if err := queueUpgrade(path, instruction); err != nil {
+		t.Fatal(err)
+	}
+	value, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(value), "v0.4.0") {
+		t.Fatalf("unexpected request: %s", value)
+	}
+}
+
 func TestResolveClaimToken(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "claim.token")

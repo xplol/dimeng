@@ -1,0 +1,9 @@
+[Unit]
+Description=Watch DiMeng Monitor Agent upgrade request
+
+[Path]
+PathChanged=/var/lib/dimeng-monitor-agent/upgrade/request.json
+Unit=dimeng-agent-updater.service
+
+[Install]
+WantedBy=multi-user.target

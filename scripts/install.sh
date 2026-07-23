@@ -15,12 +15,20 @@ UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 MANAGER_DIR="/usr/local/lib/dimeng-monitor-agent"
 MANAGER_SCRIPT="${MANAGER_DIR}/install.sh"
 MANAGER_PATH="/usr/local/bin/fwq"
+UPDATER_PATH="${MANAGER_DIR}/dimeng-agent-updater"
+UPDATER_UNIT="dimeng-agent-updater.service"
+UPDATER_PATH_UNIT="dimeng-agent-updater.path"
+UPDATER_UNIT_PATH="/etc/systemd/system/${UPDATER_UNIT}"
+UPDATER_PATH_UNIT_PATH="/etc/systemd/system/${UPDATER_PATH_UNIT}"
+RELEASE_PUBLIC_KEY_PATH="${CONFIG_DIR}/release-public.key"
+UPGRADE_DIR="${STATE_DIR}/upgrade"
 INSTALLER_URL="${DIMENG_INSTALLER_URL:-https://raw.githubusercontent.com/xplol/dimeng/main/scripts/install.sh}"
 GITHUB_RELEASE_BASE="https://github.com/xplol/dimeng/releases/download/${AGENT_VERSION}"
 GITHUB_RAW_BASE="https://raw.githubusercontent.com/xplol/dimeng/${AGENT_VERSION}/dist"
 GITEE_RAW_BASE="https://gitee.com/xiang_peng/dimeng/raw/${AGENT_VERSION}/dist"
 
 TEMP_ROOT=""
+SIGNED_UPGRADE="${DIMENG_ENABLE_SIGNED_UPGRADE:-0}"
 
 info() { printf '[滴萌] %s\n' "$*"; }
 warn() { printf '[滴萌] 警告：%s\n' "$*" >&2; }
@@ -100,6 +108,7 @@ install_usage() {
   --endpoint URL          滴萌 API 地址；更新时可读取现有配置
   --claim-token TOKEN     兼容旧版预签发流程，普通用户无需提供
   --binary PATH           使用本地二进制，供受控测试使用
+  --updater PATH          使用本地升级器，供受控测试使用
   --checksum SHA256       校验本地二进制
   --download-base URL     覆盖发布文件下载目录
   --accept-agreement      非交互方式确认已阅读并同意授权协议
@@ -117,6 +126,9 @@ fwq - 滴萌服务器探针管理命令
   fwq                 打开交互菜单
   fwq install [...]   安装或更新探针
   fwq status          查看服务状态
+  fwq doctor          检查配置、凭据、版本和本地安全状态
+  fwq doctor --json   输出结构化诊断结果
+  fwq upgrade ...     请求安装已签名的指定版本
   fwq logs            查看最近日志
   fwq restart         重启服务
   fwq uninstall       卸载探针，保留 fwq
@@ -211,6 +223,35 @@ obtain_binary() {
   die "无法下载并校验 ${asset}。请检查网络或发布资产。"
 }
 
+obtain_updater() {
+  arch="$1"
+  destination="$2"
+  if [ -n "$LOCAL_UPDATER" ]; then
+    [ -f "$LOCAL_UPDATER" ] || die "找不到本地升级器：${LOCAL_UPDATER}"
+    cp "$LOCAL_UPDATER" "$destination"
+    if [ -n "$LOCAL_UPDATER_CHECKSUM" ]; then
+      verify_checksum "$destination" "$LOCAL_UPDATER_CHECKSUM"
+    else
+      warn "本地测试升级器未提供 SHA-256；公开安装必须使用带校验的发布资产。"
+    fi
+    return
+  fi
+  asset="dimeng-agent-updater-linux-${arch}"
+  checksum_file="${TEMP_ROOT}/${asset}.sha256"
+  bases="${DOWNLOAD_BASE:-} ${GITEE_RAW_BASE} ${GITHUB_RELEASE_BASE} ${GITHUB_RAW_BASE}"
+  for base in $bases; do
+    [ -n "$base" ] || continue
+    info "尝试从 ${base} 下载 ${asset}。"
+    if download_file "${base}/${asset}" "$destination" && download_file "${base}/${asset}.sha256" "$checksum_file"; then
+      expected="$(awk 'NF {print $1; exit}' "$checksum_file")"
+      [ -n "$expected" ] || continue
+      verify_checksum "$destination" "$expected"
+      return
+    fi
+  done
+  die "无法下载并校验 ${asset}。"
+}
+
 validate_endpoint() {
   case "$ENDPOINT" in
     https://*) ;;
@@ -286,6 +327,48 @@ EOF
   install -m 0644 "$unit_temp" "$UNIT_PATH"
 }
 
+write_updater_units() {
+  cat >"${TEMP_ROOT}/${UPDATER_UNIT}" <<EOF
+[Unit]
+Description=DiMeng Monitor Agent signed updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=${CONFIG_DIR}/updater.env
+ExecStart=${UPDATER_PATH} --request-file ${UPGRADE_DIR}/request.json --public-key-file ${RELEASE_PUBLIC_KEY_PATH} --install-path ${BIN_PATH} --backup-path ${MANAGER_DIR}/dimeng-monitor-agent.previous --service ${SERVICE_NAME}.service --allowed-hosts \${DIMENG_RELEASE_HOSTS}
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/usr/local/bin ${MANAGER_DIR} ${UPGRADE_DIR}
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+EOF
+  cat >"${TEMP_ROOT}/${UPDATER_PATH_UNIT}" <<EOF
+[Unit]
+Description=Watch DiMeng Monitor Agent upgrade request
+
+[Path]
+PathChanged=${UPGRADE_DIR}/request.json
+Unit=${UPDATER_UNIT}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  install -m 0644 "${TEMP_ROOT}/${UPDATER_UNIT}" "$UPDATER_UNIT_PATH"
+  install -m 0644 "${TEMP_ROOT}/${UPDATER_PATH_UNIT}" "$UPDATER_PATH_UNIT_PATH"
+}
+
 install_agent() {
   require_root
   [ "$(uname -s)" = "Linux" ] || die "当前安装器只支持 Linux。"
@@ -302,8 +385,11 @@ install_agent() {
   TEMP_ROOT="$(mktemp -d)"
   arch="$(detect_arch)"
   staged_binary="${TEMP_ROOT}/dimeng-monitor-agent"
+  staged_updater="${TEMP_ROOT}/dimeng-agent-updater"
   obtain_binary "$arch" "$staged_binary"
+  if [ "$SIGNED_UPGRADE" = "1" ]; then obtain_updater "$arch" "$staged_updater"; fi
   chmod 0755 "$staged_binary"
+  if [ "$SIGNED_UPGRADE" = "1" ]; then chmod 0755 "$staged_updater"; fi
   "$staged_binary" --once >/dev/null || die "二进制自检失败。"
 
   if ! id -u "$AGENT_USER" >/dev/null 2>&1; then
@@ -314,8 +400,17 @@ install_agent() {
 
   install -d -m 0750 "$CONFIG_DIR"
   install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$STATE_DIR"
+  install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
   install -m 0755 "$staged_binary" "$BIN_PATH"
+  if [ "$SIGNED_UPGRADE" = "1" ]; then
+    install -m 0755 "$staged_updater" "$UPDATER_PATH"
+    install -m 0644 "$(dirname "$0")/../packaging/release/release-public.key" "$RELEASE_PUBLIC_KEY_PATH" 2>/dev/null || printf '%s\n' '5yxcw3LN4gwLvjUtL4okJsKzTRbJ0hiAHI9VNo6cuu4=' >"$RELEASE_PUBLIC_KEY_PATH"
+    chmod 0644 "$RELEASE_PUBLIC_KEY_PATH"
+    printf 'DIMENG_RELEASE_HOSTS=downloads.ping1.me,github.com,objects.githubusercontent.com,gitee.com\n' >"${CONFIG_DIR}/updater.env"
+    chmod 0644 "${CONFIG_DIR}/updater.env"
+  fi
   printf 'DIMENG_ENDPOINT=%s\n' "$ENDPOINT" >"$ENV_PATH"
+  printf 'DIMENG_AUTO_UPGRADE=%s\n' "$([ "$SIGNED_UPGRADE" = "1" ] && printf true || printf false)" >>"$ENV_PATH"
   chmod 0600 "$ENV_PATH"
   if [ ! -s "$SESSION_TOKEN_PATH" ] && [ -n "$CLAIM_TOKEN" ]; then
     printf '%s\n' "$CLAIM_TOKEN" >"$CLAIM_TOKEN_PATH"
@@ -328,8 +423,10 @@ install_agent() {
   chmod 0644 "${CONFIG_DIR}/agreement.accepted"
 
   write_systemd_unit
+  if [ "$SIGNED_UPGRADE" = "1" ]; then write_updater_units; fi
   prepare_manager_script
   systemctl daemon-reload
+  if [ "$SIGNED_UPGRADE" = "1" ]; then systemctl enable "$UPDATER_PATH_UNIT"; fi
   if [ "$NO_START" = "1" ]; then
     systemctl enable "$SERVICE_NAME"
     info "探针已安装并设为开机启动，本次按参数要求未启动。"
@@ -348,6 +445,8 @@ install_main() {
   CLAIM_TOKEN="${DIMENG_CLAIM_TOKEN:-}"
   LOCAL_BINARY=""
   LOCAL_CHECKSUM=""
+  LOCAL_UPDATER=""
+  LOCAL_UPDATER_CHECKSUM=""
   DOWNLOAD_BASE="${DIMENG_DOWNLOAD_BASE:-}"
   ACCEPT_AGREEMENT="${DIMENG_ACCEPT_AGREEMENT:-0}"
   NO_START=0
@@ -358,6 +457,7 @@ install_main() {
       --claim-token) [ "$#" -ge 2 ] || die "--claim-token 缺少参数"; CLAIM_TOKEN="$2"; shift 2 ;;
       --binary) [ "$#" -ge 2 ] || die "--binary 缺少参数"; LOCAL_BINARY="$2"; shift 2 ;;
       --checksum) [ "$#" -ge 2 ] || die "--checksum 缺少参数"; LOCAL_CHECKSUM="$2"; shift 2 ;;
+      --updater) [ "$#" -ge 2 ] || die "--updater 缺少参数"; LOCAL_UPDATER="$2"; shift 2 ;;
       --download-base) [ "$#" -ge 2 ] || die "--download-base 缺少参数"; DOWNLOAD_BASE="$2"; shift 2 ;;
       --accept-agreement) ACCEPT_AGREEMENT=1; shift ;;
       --no-start) NO_START=1; shift ;;
@@ -390,7 +490,7 @@ uninstall_agent() {
   fi
 
   systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
-  rm -f "$UNIT_PATH" "$BIN_PATH"
+  rm -f "$UNIT_PATH" "$UPDATER_UNIT_PATH" "$UPDATER_PATH_UNIT_PATH" "$BIN_PATH"
   rm -rf "$CONFIG_DIR" "$STATE_DIR"
   systemctl daemon-reload
   systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -497,6 +597,28 @@ manager_main() {
     menu) manager_menu ;;
     install|update) install_main "$@" ;;
     status) manager_status ;;
+    doctor)
+      require_root
+      doctor_json=0
+      [ "${1:-}" = "--json" ] && doctor_json=1
+      endpoint="$(read_existing_endpoint)"
+      [ -n "$endpoint" ] || die "找不到 API 地址，请先安装探针。"
+      if [ "$doctor_json" = "1" ]; then
+        "$BIN_PATH" --endpoint "$endpoint" --state-dir "$STATE_DIR" --doctor-json
+      else
+        "$BIN_PATH" --endpoint "$endpoint" --state-dir "$STATE_DIR" --doctor
+      fi
+      ;;
+    upgrade)
+      require_root
+      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.0 发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
+      [ "$#" -eq 3 ] || die "用法：fwq upgrade <版本> <manifest_url> <signature_url>"
+      install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
+      printf '{"version":"%s","manifest_url":"%s","signature_url":"%s"}\n' "$1" "$2" "$3" >"${UPGRADE_DIR}/request.json"
+      chown "$AGENT_USER:$AGENT_USER" "${UPGRADE_DIR}/request.json"
+      chmod 0600 "${UPGRADE_DIR}/request.json"
+      systemctl start "$UPDATER_UNIT"
+      ;;
     logs) journalctl -u "$SERVICE_NAME" -n 100 --no-pager "$@" ;;
     restart) require_root; systemctl restart "$SERVICE_NAME"; manager_status ;;
     uninstall)

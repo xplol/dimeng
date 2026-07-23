@@ -1,0 +1,24 @@
+[Unit]
+Description=DiMeng Monitor Agent signed updater
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=/etc/dimeng-monitor-agent/updater.env
+ExecStart=/usr/local/lib/dimeng-monitor-agent/dimeng-agent-updater --request-file /var/lib/dimeng-monitor-agent/upgrade/request.json --public-key-file /etc/dimeng-monitor-agent/release-public.key --install-path /usr/local/bin/dimeng-monitor-agent --backup-path /usr/local/lib/dimeng-monitor-agent/dimeng-monitor-agent.previous --service dimeng-monitor-agent.service --allowed-hosts ${DIMENG_RELEASE_HOSTS}
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/usr/local/bin /usr/local/lib/dimeng-monitor-agent /var/lib/dimeng-monitor-agent/upgrade
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
