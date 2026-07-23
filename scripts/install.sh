@@ -424,7 +424,7 @@ install_agent() {
     install -m 0755 "$staged_updater" "$UPDATER_PATH"
     install -m 0644 "$(dirname "$0")/../packaging/release/release-public.key" "$RELEASE_PUBLIC_KEY_PATH" 2>/dev/null || printf '%s\n' '5yxcw3LN4gwLvjUtL4okJsKzTRbJ0hiAHI9VNo6cuu4=' >"$RELEASE_PUBLIC_KEY_PATH"
     chmod 0644 "$RELEASE_PUBLIC_KEY_PATH"
-    printf 'DIMENG_RELEASE_HOSTS=downloads.ping1.me,github.com,objects.githubusercontent.com,gitee.com\n' >"${CONFIG_DIR}/updater.env"
+    printf 'DIMENG_RELEASE_HOSTS=downloads.ping1.me,github.com,objects.githubusercontent.com,release-assets.githubusercontent.com,gitee.com,raw.giteeusercontent.com\n' >"${CONFIG_DIR}/updater.env"
     chmod 0644 "${CONFIG_DIR}/updater.env"
   fi
   printf 'DIMENG_ENDPOINT=%s\n' "$ENDPOINT" >"$ENV_PATH"
@@ -630,7 +630,7 @@ manager_main() {
       ;;
     upgrade)
       require_root
-      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.2 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
+      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.3 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
       [ "$#" -eq 3 ] || die "用法：fwq upgrade <版本> <manifest_url> <signature_url>"
       install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
       printf '{"version":"%s","manifest_url":"%s","signature_url":"%s"}\n' "$1" "$2" "$3" >"${UPGRADE_DIR}/request.json"
