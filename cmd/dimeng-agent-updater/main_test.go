@@ -66,3 +66,34 @@ func TestVersionComparisonAndAllowedHosts(t *testing.T) {
 		t.Fatal("nil URL must not be trusted")
 	}
 }
+
+func TestCopyFileAtomicAcrossDirectories(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "bin")
+	destinationDir := filepath.Join(dir, "backup")
+	if err := os.MkdirAll(sourceDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(sourceDir, "agent")
+	destinationPath := filepath.Join(destinationDir, "agent.previous")
+	if err := os.WriteFile(sourcePath, []byte("v0.3.3"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := copyFileAtomic(sourcePath, destinationPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	value, err := os.ReadFile(destinationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(value) != "v0.3.3" {
+		t.Fatalf("unexpected copied value: %q", value)
+	}
+	info, err := os.Stat(destinationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0755 {
+		t.Fatalf("unexpected copied mode: %o", info.Mode().Perm())
+	}
+}

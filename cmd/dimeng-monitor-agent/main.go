@@ -66,7 +66,7 @@ type heartbeatResponse struct {
 	Upgrade *upgradeInstruction `json:"upgrade,omitempty"`
 }
 
-const agentVersion = "v0.3.3"
+const agentVersion = "v0.3.4"
 
 var agentCapabilities = []string{
 	"system_metrics",

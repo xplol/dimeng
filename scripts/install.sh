@@ -630,7 +630,7 @@ manager_main() {
       ;;
     upgrade)
       require_root
-      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.3 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
+      [ -x "$UPDATER_PATH" ] || die "签名升级器未安装；请使用 v0.3.4 或更高发布物并设置 DIMENG_ENABLE_SIGNED_UPGRADE=1。"
       [ "$#" -eq 3 ] || die "用法：fwq upgrade <版本> <manifest_url> <signature_url>"
       install -d -o "$AGENT_USER" -g "$AGENT_USER" -m 0700 "$UPGRADE_DIR"
       printf '{"version":"%s","manifest_url":"%s","signature_url":"%s"}\n' "$1" "$2" "$3" >"${UPGRADE_DIR}/request.json"

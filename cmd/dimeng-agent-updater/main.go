@@ -231,24 +231,57 @@ func replaceAndRestart(cfg updaterConfig, binary []byte, version string) error {
 	if err := os.MkdirAll(filepath.Dir(cfg.BackupPath), 0755); err != nil {
 		return err
 	}
-	if err := os.Rename(cfg.InstallPath, cfg.BackupPath); err != nil {
+	if err := copyFileAtomic(cfg.InstallPath, cfg.BackupPath, 0755); err != nil {
 		return err
 	}
 	if err := os.Rename(stagedPath, cfg.InstallPath); err != nil {
-		_ = os.Rename(cfg.BackupPath, cfg.InstallPath)
 		return err
 	}
 	if err := cfg.RunCommand("systemctl", "restart", cfg.Service); err == nil && waitForStableService(cfg, version, 20*time.Second) {
 		return nil
 	}
-	_ = os.Remove(cfg.InstallPath)
-	if restoreErr := os.Rename(cfg.BackupPath, cfg.InstallPath); restoreErr != nil {
+	if restoreErr := copyFileAtomic(cfg.BackupPath, cfg.InstallPath, 0755); restoreErr != nil {
 		return fmt.Errorf("new version failed and rollback failed: %w", restoreErr)
 	}
 	if restartErr := cfg.RunCommand("systemctl", "restart", cfg.Service); restartErr != nil {
 		return fmt.Errorf("new version failed; restored previous binary but restart failed: %w", restartErr)
 	}
 	return errors.New("new version failed health check and was rolled back")
+}
+
+func copyFileAtomic(sourcePath, destinationPath string, mode os.FileMode) error {
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(destinationPath), ".dimeng-copy-*")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+
+	if _, err := io.Copy(temporary, source); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, destinationPath)
 }
 
 func waitForStableService(cfg updaterConfig, version string, timeout time.Duration) bool {
