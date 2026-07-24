@@ -3,6 +3,7 @@ set -eu
 
 AGENT_VERSION="${DIMENG_VERSION:-v0.2.0}"
 AGREEMENT_VERSION="2026-07-22-v2"
+DEFAULT_ENDPOINT="https://xlx.wipecell.top"
 SERVICE_NAME="dimeng-monitor-agent"
 AGENT_USER="dimeng-agent"
 BIN_PATH="/usr/local/bin/dimeng-monitor-agent"
@@ -114,10 +115,10 @@ accept_agreement() {
 install_usage() {
   cat <<'EOF'
 用法：
-  sudo sh install.sh --endpoint <HTTPS地址>
+  sudo sh install.sh [--endpoint <HTTPS地址>]
 
 参数：
-  --endpoint URL          滴萌 API 地址；更新时可读取现有配置
+  --endpoint URL          覆盖滴萌 API 地址；普通用户无需提供
   --claim-token TOKEN     兼容旧版预签发流程，普通用户无需提供
   --binary PATH           使用本地二进制，供受控测试使用
   --updater PATH          使用本地升级器，供受控测试使用
@@ -397,7 +398,7 @@ install_agent() {
   if [ -z "$ENDPOINT" ]; then
     ENDPOINT="$(read_existing_endpoint)"
   fi
-  [ -n "$ENDPOINT" ] || die "首次安装必须提供 --endpoint。"
+  [ -n "$ENDPOINT" ] || ENDPOINT="$DEFAULT_ENDPOINT"
   validate_endpoint
   TEMP_ROOT="$(mktemp -d)"
   arch="$(detect_arch)"
@@ -545,17 +546,10 @@ manager_status() {
 }
 
 interactive_install() {
-  has_tty || die "交互安装需要终端；非交互环境请使用 fwq install --endpoint ...。"
+  has_tty || die "交互安装需要终端；非交互环境请使用 fwq install。"
   existing_endpoint="$(read_existing_endpoint)"
-  if [ -n "$existing_endpoint" ]; then
-    printf 'API 地址 [%s]：' "$existing_endpoint" >/dev/tty
-  else
-    printf 'API 地址（例如 https://api.example.com）：' >/dev/tty
-  fi
-  endpoint_input=""
-  IFS= read -r endpoint_input </dev/tty || true
-  [ -n "$endpoint_input" ] || endpoint_input="$existing_endpoint"
-
+  endpoint_input="${existing_endpoint:-$DEFAULT_ENDPOINT}"
+  info "使用滴萌服务地址：$endpoint_input"
   install_main --endpoint "$endpoint_input"
 }
 
